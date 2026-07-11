@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bohork Tracker</title>
+<style>
+*{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+body{margin:0;background:#f5f5f3;color:#1a1a1a}
+.wrap{max-width:900px;margin:0 auto;padding:16px}
+.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.gear{cursor:pointer;font-size:18px;background:none;border:none;color:#888}
+.status{font-size:12px;color:#999;min-height:16px;margin-bottom:8px}
+.gametabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.gametab{padding:8px 14px;border-radius:20px;border:none;cursor:pointer;font-size:14px;font-weight:600;color:#fff;opacity:.55}
+.gametab.active{opacity:1}
+.addgame{padding:8px 14px;border-radius:20px;border:1px dashed #bbb;background:#fff;cursor:pointer;font-size:14px;color:#666}
+.card{background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:8px;box-shadow:0 0 0 1px #eee}
+.card .head{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#999;margin-bottom:2px}
+.card .title{font-size:14px;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.title input{border:none;font-size:14px;font-weight:600;width:100%;outline:none;background:transparent}
+.steps{display:flex;gap:3px;margin-bottom:4px}
+.seg{flex:1;height:9px;border-radius:3px;cursor:pointer}
+.label{font-size:11px;color:#888}
+.x{cursor:pointer;color:#bbb;font-size:16px;line-height:1;padding:2px 4px}
+.x:hover{color:#c0392b}
+.children{margin-left:16px;padding-left:12px;border-left:2px solid #f0f0f0;margin-top:8px}
+.addbtn{font-size:12px;color:#888;background:none;border:none;cursor:pointer;padding:4px 6px}
+.addbtn:hover{color:#333}
+.dots{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.dot{width:15px;height:15px;border-radius:50%;cursor:pointer}
+.dotadd{width:15px;height:15px;border-radius:50%;border:1px dashed #bbb;display:flex;align-items:center;justify-content:center;font-size:11px;color:#999;cursor:pointer}
+.dotdel{font-size:11px;color:#bbb;cursor:pointer;margin-left:4px}
+.section-label{font-size:12px;color:#999;margin:14px 0 6px}
+.newgame{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
+.newgame input{padding:6px 8px;border:1px solid #ddd;border-radius:6px;font-size:13px}
+.swatch{width:20px;height:20px;border-radius:50%;cursor:pointer;border:2px solid transparent}
+.swatch.sel{border-color:#333}
+.modal-bg{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:10}
+.modal{background:#fff;border-radius:12px;padding:20px;width:90%;max-width:420px}
+.modal h3{margin-top:0;font-size:16px}
+.modal label{font-size:12px;color:#666;display:block;margin:10px 0 4px}
+.modal input,.modal textarea{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px}
+.modal .row{display:flex;gap:8px;margin-top:16px}
+.modal button{flex:1;padding:8px;border-radius:6px;border:1px solid #ddd;background:#fff;cursor:pointer;font-size:13px}
+.modal button.primary{background:#1a1a1a;color:#fff;border-color:#1a1a1a}
+.hint{font-size:11px;color:#999;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <strong>Bohork Tracker</strong>
+    <button class="gear" onclick="openSettings()">⚙</button>
+  </div>
+  <div id="status" class="status"></div>
+  <div id="gametabs" class="gametabs"></div>
+  <div id="newgameform" style="display:none" class="newgame"></div>
+  <div id="content"></div>
+</div>
+<div id="modalRoot"></div>
+
+<script>
+const PALETTE=['#D85A30','#7F77DD','#D4537E','#1D9E75','#BA7517','#378ADD'];
+const GIST_FILENAME='bohork-tracker.json';
+let games=[], items={}, activeGame=null;
+let saveQueue=Promise.resolve();
+
+function getToken(){ return localStorage.getItem('bt_token')||''; }
+function getGistId(){ return localStorage.getItem('bt_gist')||''; }
+function setCreds(token,gist){ localStorage.setItem('bt_token',token); localStorage.setItem('bt_gist',gist); }
+
+function setStatus(msg){ const s=document.getElementById('status'); if(s) s.textContent=msg; }
+
+async function ghFetch(url,opts){
+  opts=opts||{};
+  opts.headers=Object.assign({
+    'Authorization':'token '+getToken(),
+    'Accept':'application/vnd.github+json'
+  }, opts.headers||{});
+  const r=await fetch(url,opts);
+  if(!r.ok){ const t=await r.text(); throw new Error('GitHub API '+r.status+': '+t.slice(0,150)); }
+  return r.json();
+}
+
+async function loadFromGist(){
+  const gid=getGistId();
+  if(!getToken()||!gid){ return null; }
+  setStatus('cargando desde gist...');
+  const g=await ghFetch('https://api.github.com/gists/'+gid);
+  const file=g.files[GIST_FILENAME];
+  if(!file) return {games:[],items:{}};
+  return JSON.parse(file.content);
+}
+
+async function saveToGist(){
+  const gid=getGistId();
+  if(!getToken()||!gid){ setStatus('sin conectar a un gist todavia'); return; }
+  saveQueue=saveQueue.then(async ()=>{
+    setStatus('guardando...');
+    const payload={games,items};
+    await ghFetch('https://api.github.com/gists/'+gid,{
+      method:'PATCH',
+      body:JSON.stringify({files:{[GIST_FILENAME]:{content:JSON.stringify(payload,null,2)}}})
+    });
+    setStatus('guardado ✓');
+    setTimeout(()=>setStatus(''),1500);
+  }).catch(e=>{ setStatus('error guardando: '+e.message); });
+  return saveQueue;
+}
+
+async function createGist(token){
+  const r=await fetch('https://api.github.com/gists',{
+    method:'POST',
+    headers:{'Authorization':'token '+token,'Accept':'application/vnd.github+json'},
+    body:JSON.stringify({description:'Bohork Tracker data',public:false,files:{[GIST_FILENAME]:{content:JSON.stringify({games:[],items:{}})}}})
+  });
+  if(!r.ok) throw new Error('No se pudo crear el gist ('+r.status+')');
+  const g=await r.json();
+  return g.id;
+}
+
+async function loadAll(){
+  const token=getToken(), gid=getGistId();
+  if(!token||!gid){
+    openSettings();
+    setStatus('conecta tu gist para empezar');
+    return;
+  }
+  try{
+    const data=await loadFromGist();
+    games=data.games||[];
+    items=data.items||{};
+    if(!games.length){ await seedGames(); }
+    activeGame=games.length?games[0].id:null;
+    setStatus('');
+    render();
+  }catch(e){
+    setStatus('Error cargando: '+e.message);
+  }
+}
+
+async function seedGames(){
+  games=[{id:'crash',name:'Crash Bandicoot',color:PALETTE[0]},{id:'kameo',name:'Kameo: Elements of Power',color:PALETTE[1]}];
+  items={
+    crash:[
+      {id:'c1',type:'vod',label:'Historia (cerrada)',parentId:null,status:3},
+      {id:'c2',type:'tiktok',label:'Fragmento suelto 1',parentId:null,status:2},
+      {id:'c3',type:'tiktok',label:'Fragmento suelto 2',parentId:null,status:2},
+      {id:'c4',type:'tiktok',label:'Fragmento suelto 3',parentId:null,status:2}
+    ],
+    kameo:[
+      {id:'k1',type:'vod',label:'Live 01',parentId:null,status:1},
+      {id:'k2',type:'gameplay',label:'Primer boss',parentId:'k1',status:1,episode:'',playlist:''}
+    ]
+  };
+  await saveToGist();
+}
+
+function stagesFor(type,hasParent){
+  if(type==='vod') return ['grabado','miniatura','subir'];
+  if(hasParent) return ['ubicar','editar','miniatura','subir'];
+  return ['editar','miniatura','subir'];
+}
+function uid(){ return Math.random().toString(36).slice(2,9); }
+
+function render(){
+  const tabs=document.getElementById('gametabs');
+  tabs.innerHTML='';
+  games.forEach(g=>{
+    const b=document.createElement('button');
+    b.className='gametab'+(g.id===activeGame?' active':'');
+    b.style.background=g.color;
+    b.textContent=g.name;
+    b.onclick=()=>{activeGame=g.id;render();};
+    tabs.appendChild(b);
+  });
+  const add=document.createElement('button');
+  add.className='addgame'; add.textContent='+ juego';
+  add.onclick=showNewGameForm;
+  tabs.appendChild(add);
+
+  const c=document.getElementById('content');
+  c.innerHTML='';
+  if(!activeGame) return;
+  const g=games.find(x=>x.id===activeGame);
+  const list=items[activeGame]||[];
+  list.filter(i=>i.type==='vod').forEach(v=>c.appendChild(renderVod(g,v)));
+
+  const addVod=document.createElement('button');
+  addVod.className='addbtn'; addVod.textContent='+ VOD';
+  addVod.onclick=()=>addItem('vod',null,{label:'Nuevo VOD'});
+  c.appendChild(addVod);
+
+  const lbl=document.createElement('div');
+  lbl.className='section-label'; lbl.textContent='Gameplays sueltos (sin VOD)';
+  c.appendChild(lbl);
+  list.filter(i=>i.type==='gameplay'&&!i.parentId).forEach(gp=>c.appendChild(renderGameplay(g,gp)));
+  const addGp=document.createElement('button');
+  addGp.className='addbtn'; addGp.textContent='+ gameplay suelto';
+  addGp.onclick=()=>addItem('gameplay',null,{label:'Nuevo gameplay',episode:'',playlist:''});
+  c.appendChild(addGp);
+}
+
+function renderVod(g,v){
+  const card=document.createElement('div');
+  card.className='card'; card.style.borderLeft='4px solid '+g.color;
+  card.appendChild(cardHead('VOD',v,g));
+  card.appendChild(stepper(g,v,stagesFor('vod',false)));
+  const kids=document.createElement('div'); kids.className='children';
+  const list=items[g.id];
+  list.filter(i=>i.type==='gameplay'&&i.parentId===v.id).forEach(gp=>kids.appendChild(renderGameplay(g,gp)));
+  const directTt=list.filter(i=>i.type==='tiktok'&&i.parentId===v.id);
+  if(directTt.length) kids.appendChild(dotRow(g,directTt,v.id));
+  const row=document.createElement('div');
+  const b1=document.createElement('button'); b1.className='addbtn'; b1.textContent='+ gameplay';
+  b1.onclick=()=>addItem('gameplay',v.id,{label:'Nuevo gameplay',episode:'',playlist:''});
+  const b2=document.createElement('button'); b2.className='addbtn'; b2.textContent='+ tiktok directo';
+  b2.onclick=()=>addItem('tiktok',v.id,{label:'tt'});
+  row.appendChild(b1); row.appendChild(b2);
+  kids.appendChild(row);
+  card.appendChild(kids);
+  return card;
+}
+
+function renderGameplay(g,gp){
+  const card=document.createElement('div');
+  card.className='card'; card.style.borderLeft='4px solid '+g.color;
+  card.appendChild(cardHead('Gameplay'+(gp.episode?' · #'+gp.episode:''),gp,g));
+  card.appendChild(stepper(g,gp,stagesFor('gameplay',!!gp.parentId)));
+  const kids=document.createElement('div'); kids.className='children';
+  const tts=items[g.id].filter(i=>i.type==='tiktok'&&i.parentId===gp.id);
+  kids.appendChild(dotRow(g,tts,gp.id));
+  card.appendChild(kids);
+  return card;
+}
+
+function cardHead(kind,item,g){
+  const box=document.createElement('div');
+  const head=document.createElement('div'); head.className='head';
+  const k=document.createElement('span'); k.textContent=kind;
+  const del=document.createElement('span'); del.className='x'; del.textContent='×';
+  del.onclick=()=>deleteItem(g.id,item.id);
+  head.appendChild(k); head.appendChild(del);
+  box.appendChild(head);
+  const t=document.createElement('div'); t.className='title';
+  const inp=document.createElement('input'); inp.value=item.label;
+  inp.onchange=()=>{item.label=inp.value; saveToGist();};
+  t.appendChild(inp);
+  box.appendChild(t);
+  return box;
+}
+
+function stepper(g,item,stages){
+  const wrap=document.createElement('div');
+  const row=document.createElement('div'); row.className='steps';
+  stages.forEach((s,i)=>{
+    const seg=document.createElement('div'); seg.className='seg';
+    seg.style.background = i<item.status ? g.color : '#e5e5e5';
+    seg.onclick=()=>{ item.status=i+1; saveToGist(); render(); };
+    row.appendChild(seg);
+  });
+  wrap.appendChild(row);
+  const lbl=document.createElement('div'); lbl.className='label';
+  lbl.textContent = item.status<=0 ? 'sin empezar' : (item.status>=stages.length?'listo ✓':stages[item.status]);
+  wrap.appendChild(lbl);
+  return wrap;
+}
+
+function dotRow(g,list,parentId){
+  const row=document.createElement('div'); row.className='dots';
+  list.forEach(tt=>{
+    const stages=stagesFor('tiktok',!!tt.parentId);
+    const dot=document.createElement('span'); dot.className='dot';
+    dot.style.background = tt.status<=0 ? '#ddd' : hexToRgba(g.color,[0.3,0.55,0.8,1][Math.min(tt.status-1,3)]);
+    dot.title = tt.status<=0?'sin empezar':(tt.status>=stages.length?'publicado':stages[tt.status]);
+    dot.onclick=()=>{ tt.status=(tt.status+1)>stages.length?0:tt.status+1; saveToGist(); render(); };
+    row.appendChild(dot);
+  });
+  const add=document.createElement('span'); add.className='dotadd'; add.textContent='+';
+  add.onclick=()=>addItem('tiktok',parentId,{label:'tt'});
+  row.appendChild(add);
+  if(list.length){
+    const del=document.createElement('span'); del.className='dotdel'; del.textContent='deshacer último';
+    del.onclick=()=>{
+      const last=list[list.length-1];
+      items[g.id]=items[g.id].filter(i=>i.id!==last.id);
+      saveToGist(); render();
+    };
+    row.appendChild(del);
+  }
+  return row;
+}
+
+function hexToRgba(hex,a){
+  const n=parseInt(hex.slice(1),16);
+  return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';
+}
+
+function addItem(type,parentId,extra){
+  const gid=activeGame;
+  items[gid].push(Object.assign({id:uid(),type,parentId,status:0},extra));
+  saveToGist(); render();
+}
+function deleteItem(gid,id){
+  items[gid]=items[gid].filter(i=>i.id!==id && i.parentId!==id);
+  saveToGist(); render();
+}
+
+function showNewGameForm(){
+  const f=document.getElementById('newgameform');
+  f.style.display='flex'; f.innerHTML='';
+  const inp=document.createElement('input'); inp.placeholder='nombre del juego';
+  let chosen=PALETTE[games.length%PALETTE.length];
+  f.appendChild(inp);
+  PALETTE.forEach(c=>{
+    const sw=document.createElement('span');
+    sw.className='swatch'+(c===chosen?' sel':'');
+    sw.style.background=c;
+    sw.onclick=()=>{chosen=c; [...f.querySelectorAll('.swatch')].forEach(s=>s.classList.remove('sel')); sw.classList.add('sel');};
+    f.appendChild(sw);
+  });
+  const ok=document.createElement('button'); ok.className='addbtn'; ok.textContent='crear';
+  ok.onclick=()=>{
+    if(!inp.value.trim()) return;
+    const g={id:uid(),name:inp.value.trim(),color:chosen};
+    games.push(g); items[g.id]=[];
+    activeGame=g.id;
+    f.style.display='none';
+    saveToGist(); render();
+  };
+  f.appendChild(ok);
+}
+
+function openSettings(){
+  const root=document.getElementById('modalRoot');
+  root.innerHTML='';
+  const bg=document.createElement('div'); bg.className='modal-bg';
+  const m=document.createElement('div'); m.className='modal';
+  m.innerHTML='<h3>Conectar tu Gist</h3>'+
+    '<label>Token de GitHub (con permiso "gist")</label>'+
+    '<input id="tokIn" type="password" placeholder="ghp_..." value="'+getToken()+'">'+
+    '<label>ID del Gist</label>'+
+    '<input id="gidIn" placeholder="Pega aqui el ID, o crea uno nuevo abajo" value="'+getGistId()+'">'+
+    '<div class="hint">El token nunca se guarda en el Gist, solo vive en este navegador (localStorage), igual que en Gestor.</div>';
+  const row=document.createElement('div'); row.className='row';
+  const btnNew=document.createElement('button'); btnNew.textContent='Crear gist nuevo';
+  btnNew.onclick=async ()=>{
+    const tok=document.getElementById('tokIn').value.trim();
+    if(!tok){ alert('Pon tu token primero'); return; }
+    try{
+      const id=await createGist(tok);
+      setCreds(tok,id);
+      root.innerHTML=''; 
+      await loadAll();
+    }catch(e){ alert(e.message); }
+  };
+  const btnSave=document.createElement('button'); btnSave.className='primary'; btnSave.textContent='Guardar y conectar';
+  btnSave.onclick=async ()=>{
+    const tok=document.getElementById('tokIn').value.trim();
+    const gid=document.getElementById('gidIn').value.trim();
+    if(!tok||!gid){ alert('Faltan datos'); return; }
+    setCreds(tok,gid);
+    root.innerHTML='';
+    await loadAll();
+  };
+  row.appendChild(btnNew); row.appendChild(btnSave);
+  m.appendChild(row);
+  bg.appendChild(m);
+  bg.onclick=(e)=>{ if(e.target===bg && getToken() && getGistId()) root.innerHTML=''; };
+  root.appendChild(bg);
+}
+
+loadAll();
+</script>
+</body>
+</html>
