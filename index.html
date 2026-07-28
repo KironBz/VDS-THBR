@@ -45,6 +45,7 @@ body{margin:0;background:#f5f5f3;color:#1a1a1a}
 .modal button{flex:1;padding:8px;border-radius:6px;border:1px solid #ddd;background:#fff;cursor:pointer;font-size:13px}
 .modal button.primary{background:#1a1a1a;color:#fff;border-color:#1a1a1a}
 .hint{font-size:11px;color:#999;margin-top:6px}
+.drag-ghost{opacity:0.4;background:#f0f4ff}
 </style>
 </head>
 <body>
@@ -60,6 +61,7 @@ body{margin:0;background:#f5f5f3;color:#1a1a1a}
 </div>
 <div id="modalRoot"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
 <script>
 const PALETTE=['#D85A30','#7F77DD','#D4537E','#1D9E75','#BA7517','#378ADD'];
 const GIST_FILENAME='bohork-tracker.json';
@@ -178,38 +180,38 @@ function stagesFor(type,hasParent){
 }
 function uid(){ return Math.random().toString(36).slice(2,9); }
 
-function moveItem(gid,draggedId,targetId){
+function reorderFromDom(gid,containerEl,itemType,parentId){
+  const ids=Array.from(containerEl.children).map(el=>el.dataset.id);
   const arr=items[gid];
-  const dragged=arr.find(i=>i.id===draggedId);
-  const target=arr.find(i=>i.id===targetId);
-  if(!dragged||!target||dragged.id===target.id) return;
-  if(dragged.type!==target.type || dragged.parentId!==target.parentId) return;
-  arr.splice(arr.indexOf(dragged),1);
-  arr.splice(arr.indexOf(target),0,dragged);
-  scheduleSave(); render();
+  const groupIndices=[];
+  arr.forEach((it,idx)=>{ if(it.type===itemType && it.parentId===parentId) groupIndices.push(idx); });
+  if(!groupIndices.length) return;
+  const firstIdx=groupIndices[0];
+  const byId={};
+  groupIndices.forEach(idx=>{ byId[arr[idx].id]=arr[idx]; });
+  const newGroupItems=ids.map(id=>byId[id]).filter(Boolean);
+  for(let i=arr.length-1;i>=0;i--){ if(arr[i].type===itemType && arr[i].parentId===parentId) arr.splice(i,1); }
+  arr.splice(firstIdx,0,...newGroupItems);
+  scheduleSave();
 }
 
-function makeDraggable(cardEl,item,gid){
-  const handle=document.createElement('span');
-  handle.textContent='⋮⋮';
-  handle.title='arrastrar para reordenar';
-  handle.style.cssText='cursor:grab;color:#ccc;font-size:12px;letter-spacing:-2px;margin-right:4px;user-select:none';
-  handle.draggable=true;
-  handle.addEventListener('dragstart',e=>{
-    e.dataTransfer.setData('text/plain',item.id);
-    e.dataTransfer.effectAllowed='move';
-    cardEl.style.opacity='0.4';
+function makeSortable(containerEl,gid,itemType,parentId){
+  if(!window.Sortable) return;
+  Sortable.create(containerEl,{
+    handle:'.drag-handle',
+    animation:150,
+    ghostClass:'drag-ghost',
+    onEnd:()=>reorderFromDom(gid,containerEl,itemType,parentId)
   });
-  handle.addEventListener('dragend',()=>{ cardEl.style.opacity='1'; });
-  cardEl.addEventListener('dragover',e=>{ e.preventDefault(); cardEl.style.background='#f0f4ff'; });
-  cardEl.addEventListener('dragleave',()=>{ cardEl.style.background='#fff'; });
-  cardEl.addEventListener('drop',e=>{
-    e.preventDefault();
-    cardEl.style.background='#fff';
-    const draggedId=e.dataTransfer.getData('text/plain');
-    moveItem(gid,draggedId,item.id);
-  });
-  return handle;
+}
+
+function dragHandle(){
+  const h=document.createElement('span');
+  h.textContent='⋮⋮';
+  h.className='drag-handle';
+  h.title='arrastrar para reordenar';
+  h.style.cssText='cursor:grab;color:#ccc;font-size:12px;letter-spacing:-2px;margin-right:4px;user-select:none';
+  return h;
 }
 
 function render(){
@@ -242,7 +244,11 @@ function render(){
   if(!activeGame) return;
   const g=games.find(x=>x.id===activeGame);
   const list=items[activeGame]||[];
-  list.filter(i=>i.type==='vod').forEach(v=>c.appendChild(renderVod(g,v)));
+  const vodContainer=document.createElement('div');
+  vodContainer.dataset.role='vod-list';
+  list.filter(i=>i.type==='vod').forEach(v=>vodContainer.appendChild(renderVod(g,v)));
+  c.appendChild(vodContainer);
+  makeSortable(vodContainer,g.id,'vod',null);
 
   const addVod=document.createElement('button');
   addVod.className='addbtn'; addVod.textContent='+ VOD';
@@ -252,7 +258,10 @@ function render(){
   const lbl=document.createElement('div');
   lbl.className='section-label'; lbl.textContent='Gameplays sueltos (sin VOD)';
   c.appendChild(lbl);
-  list.filter(i=>i.type==='gameplay'&&!i.parentId).forEach(gp=>c.appendChild(renderGameplay(g,gp)));
+  const looseContainer=document.createElement('div');
+  list.filter(i=>i.type==='gameplay'&&!i.parentId).forEach(gp=>looseContainer.appendChild(renderGameplay(g,gp)));
+  c.appendChild(looseContainer);
+  makeSortable(looseContainer,g.id,'gameplay',null);
   const addGp=document.createElement('button');
   addGp.className='addbtn'; addGp.textContent='+ gameplay suelto';
   addGp.onclick=()=>addItem('gameplay',null,{label:'Nuevo gameplay',episode:'',playlist:''});
@@ -306,6 +315,7 @@ function showArchivedList(){
 function renderVod(g,v){
   const card=document.createElement('div');
   card.className='card'; card.style.borderLeft='4px solid '+g.color;
+  card.dataset.id=v.id;
   const isCollapsed=collapsed.has(v.id);
   const head=cardHead('VOD',v,g);
   const toggle=document.createElement('span');
@@ -316,7 +326,7 @@ function renderVod(g,v){
   toggle.title=childCount+' elemento(s)';
   toggle.onclick=()=>{ isCollapsed?collapsed.delete(v.id):collapsed.add(v.id); render(); };
   head.querySelector('.title').prepend(toggle);
-  head.querySelector('.title').prepend(makeDraggable(card,v,g.id));
+  head.querySelector('.title').prepend(dragHandle());
   if(childCount){
     const count=document.createElement('span');
     count.style.cssText='font-size:11px;color:#aaa;font-weight:400';
@@ -327,7 +337,10 @@ function renderVod(g,v){
   card.appendChild(stepper(g,v,stagesFor('vod',false)));
   if(!isCollapsed){
     const kids=document.createElement('div'); kids.className='children';
-    list.filter(i=>i.type==='gameplay'&&i.parentId===v.id).forEach(gp=>kids.appendChild(renderGameplay(g,gp)));
+    const gpContainer=document.createElement('div');
+    list.filter(i=>i.type==='gameplay'&&i.parentId===v.id).forEach(gp=>gpContainer.appendChild(renderGameplay(g,gp)));
+    kids.appendChild(gpContainer);
+    makeSortable(gpContainer,g.id,'gameplay',v.id);
     const directTt=list.filter(i=>i.type==='tiktok'&&i.parentId===v.id);
     if(directTt.length) kids.appendChild(dotRow(g,directTt,v.id));
     const row=document.createElement('div');
@@ -345,8 +358,9 @@ function renderVod(g,v){
 function renderGameplay(g,gp){
   const card=document.createElement('div');
   card.className='card'; card.style.borderLeft='4px solid '+g.color;
+  card.dataset.id=gp.id;
   const head=cardHead('Gameplay'+(gp.episode?' · #'+gp.episode:''),gp,g);
-  head.querySelector('.title').prepend(makeDraggable(card,gp,g.id));
+  head.querySelector('.title').prepend(dragHandle());
   card.appendChild(head);
   card.appendChild(stepper(g,gp,stagesFor('gameplay',!!gp.parentId)));
   const kids=document.createElement('div'); kids.className='children';
