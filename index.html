@@ -71,7 +71,7 @@ let saveTimer=null;
 function scheduleSave(){
   setStatus('cambios sin guardar...');
   if(saveTimer) clearTimeout(saveTimer);
-  saveTimer=setTimeout(()=>{ saveToGist(); }, 900);
+  saveTimer=setTimeout(()=>{ saveToGist(); }, 10000);
 }
 
 function getToken(){ return localStorage.getItem('bt_token')||''; }
@@ -178,6 +178,40 @@ function stagesFor(type,hasParent){
 }
 function uid(){ return Math.random().toString(36).slice(2,9); }
 
+function moveItem(gid,draggedId,targetId){
+  const arr=items[gid];
+  const dragged=arr.find(i=>i.id===draggedId);
+  const target=arr.find(i=>i.id===targetId);
+  if(!dragged||!target||dragged.id===target.id) return;
+  if(dragged.type!==target.type || dragged.parentId!==target.parentId) return;
+  arr.splice(arr.indexOf(dragged),1);
+  arr.splice(arr.indexOf(target),0,dragged);
+  scheduleSave(); render();
+}
+
+function makeDraggable(cardEl,item,gid){
+  const handle=document.createElement('span');
+  handle.textContent='⋮⋮';
+  handle.title='arrastrar para reordenar';
+  handle.style.cssText='cursor:grab;color:#ccc;font-size:12px;letter-spacing:-2px;margin-right:4px;user-select:none';
+  handle.draggable=true;
+  handle.addEventListener('dragstart',e=>{
+    e.dataTransfer.setData('text/plain',item.id);
+    e.dataTransfer.effectAllowed='move';
+    cardEl.style.opacity='0.4';
+  });
+  handle.addEventListener('dragend',()=>{ cardEl.style.opacity='1'; });
+  cardEl.addEventListener('dragover',e=>{ e.preventDefault(); cardEl.style.background='#f0f4ff'; });
+  cardEl.addEventListener('dragleave',()=>{ cardEl.style.background='#fff'; });
+  cardEl.addEventListener('drop',e=>{
+    e.preventDefault();
+    cardEl.style.background='#fff';
+    const draggedId=e.dataTransfer.getData('text/plain');
+    moveItem(gid,draggedId,item.id);
+  });
+  return handle;
+}
+
 function render(){
   const tabs=document.getElementById('gametabs');
   tabs.innerHTML='';
@@ -282,6 +316,7 @@ function renderVod(g,v){
   toggle.title=childCount+' elemento(s)';
   toggle.onclick=()=>{ isCollapsed?collapsed.delete(v.id):collapsed.add(v.id); render(); };
   head.querySelector('.title').prepend(toggle);
+  head.querySelector('.title').prepend(makeDraggable(card,v,g.id));
   if(childCount){
     const count=document.createElement('span');
     count.style.cssText='font-size:11px;color:#aaa;font-weight:400';
@@ -310,7 +345,9 @@ function renderVod(g,v){
 function renderGameplay(g,gp){
   const card=document.createElement('div');
   card.className='card'; card.style.borderLeft='4px solid '+g.color;
-  card.appendChild(cardHead('Gameplay'+(gp.episode?' · #'+gp.episode:''),gp,g));
+  const head=cardHead('Gameplay'+(gp.episode?' · #'+gp.episode:''),gp,g);
+  head.querySelector('.title').prepend(makeDraggable(card,gp,g.id));
+  card.appendChild(head);
   card.appendChild(stepper(g,gp,stagesFor('gameplay',!!gp.parentId)));
   const kids=document.createElement('div'); kids.className='children';
   const tts=items[g.id].filter(i=>i.type==='tiktok'&&i.parentId===gp.id);
