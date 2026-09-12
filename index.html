@@ -73,7 +73,7 @@ let saveTimer=null;
 function scheduleSave(){
   setStatus('cambios sin guardar...');
   if(saveTimer) clearTimeout(saveTimer);
-  saveTimer=setTimeout(()=>{ saveToGist(); }, 10000);
+  saveTimer=setTimeout(()=>{ saveToGist(); }, 30000); // Espera 10 segundos
 }
 
 function getToken(){ return localStorage.getItem('bt_token')||''; }
